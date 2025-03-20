@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +17,22 @@ import (
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
 )
+
+// アプリケーションのディレクトリを取得する
+func getAppDir() string {
+	// 実行可能ファイルのパスを取得
+	execPath, err := os.Executable()
+	if err != nil {
+		// エラーが発生した場合はカレントディレクトリを使用
+		currentDir, err := os.Getwd()
+		if err != nil {
+			log.Fatalf("カレントディレクトリの取得に失敗しました: %v", err)
+		}
+		return currentDir
+	}
+	// 実行可能ファイルのディレクトリを返す
+	return filepath.Dir(execPath)
+}
 
 // getTokenFromWeb はウェブブラウザを通じてトークンを取得する
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
@@ -78,13 +95,11 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 }
 
 // getClient はOAuth2クライアントを取得する
-func getClient(config *oauth2.Config) *http.Client {
-	// トークンファイルのパス
-	tokenFile := "token.json"
-	tok, err := tokenFromFile(tokenFile)
+func getClient(config *oauth2.Config, tokenFilePath string) *http.Client {
+	tok, err := tokenFromFile(tokenFilePath)
 	if err != nil {
 		tok = getTokenFromWeb(config)
-		saveToken(tokenFile, tok)
+		saveToken(tokenFilePath, tok)
 	} else {
 		// トークンの有効期限を確認し、期限切れなら更新を試みる
 		if tok.Expiry.Before(time.Now()) {
@@ -101,11 +116,11 @@ func getClient(config *oauth2.Config) *http.Client {
 					fmt.Println("トークンが正常に更新されました")
 					tok = newToken
 				}
-				saveToken(tokenFile, tok)
+				saveToken(tokenFilePath, tok)
 			} else {
 				fmt.Println("リフレッシュトークンがないため、再認証を行います...")
 				tok = getTokenFromWeb(config)
-				saveToken(tokenFile, tok)
+				saveToken(tokenFilePath, tok)
 			}
 		}
 	}
@@ -137,6 +152,13 @@ func listCalendars(srv *calendar.Service) {
 }
 
 func main() {
+	// アプリケーションのディレクトリを取得
+	appDir := getAppDir()
+
+	// 設定ファイルとトークンファイルのパス
+	credentialsPath := filepath.Join(appDir, "credentials.json")
+	tokenPath := filepath.Join(appDir, "token.json")
+
 	// コマンドライン引数の解析
 	startDateStr := flag.String("start", "", "開始日（YYYY-MM-DD形式）")
 	endDateStr := flag.String("end", "", "終了日（YYYY-MM-DD形式）")
@@ -153,16 +175,16 @@ func main() {
 
 	// 認証設定
 	ctx := context.Background()
-	b, err := os.ReadFile("credentials.json")
+	b, err := os.ReadFile(credentialsPath)
 	if err != nil {
-		log.Fatalf("credentials.jsonの読み込みに失敗しました: %v", err)
+		log.Fatalf("credentials.jsonの読み込みに失敗しました: %v\n設定ファイルパス: %s", err, credentialsPath)
 	}
 
 	config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope)
 	if err != nil {
 		log.Fatalf("OAuth2の設定に失敗しました: %v", err)
 	}
-	client := getClient(config)
+	client := getClient(config, tokenPath)
 
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
