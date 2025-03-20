@@ -42,8 +42,11 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 		}
 	}()
 
-	// ブラウザでURL開く指示
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	// access_typeをofflineに設定し、approval_promptをforceに設定することで、
+	// 毎回リフレッシュトークンが必ず発行されるようにする
+	authURL := config.AuthCodeURL("state-token",
+		oauth2.AccessTypeOffline,
+		oauth2.ApprovalForce)
 	fmt.Printf("ブラウザで以下のURLを開いてください:\n%v\n", authURL)
 
 	// 認証コードを受け取る
@@ -82,6 +85,29 @@ func getClient(config *oauth2.Config) *http.Client {
 	if err != nil {
 		tok = getTokenFromWeb(config)
 		saveToken(tokenFile, tok)
+	} else {
+		// トークンの有効期限を確認し、期限切れなら更新を試みる
+		if tok.Expiry.Before(time.Now()) {
+			fmt.Println("トークンの有効期限が切れています。更新を試みます...")
+
+			// RefreshTokenがある場合は、それを使用してトークンを更新
+			if tok.RefreshToken != "" {
+				tokenSource := config.TokenSource(context.Background(), tok)
+				newToken, err := tokenSource.Token()
+				if err != nil {
+					fmt.Printf("トークンの更新に失敗しました: %v\n再認証を行います...\n", err)
+					tok = getTokenFromWeb(config)
+				} else {
+					fmt.Println("トークンが正常に更新されました")
+					tok = newToken
+				}
+				saveToken(tokenFile, tok)
+			} else {
+				fmt.Println("リフレッシュトークンがないため、再認証を行います...")
+				tok = getTokenFromWeb(config)
+				saveToken(tokenFile, tok)
+			}
+		}
 	}
 	return config.Client(context.Background(), tok)
 }
