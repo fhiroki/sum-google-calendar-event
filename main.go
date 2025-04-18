@@ -151,6 +151,23 @@ func listCalendars(srv *calendar.Service) {
 	}
 }
 
+// 月文字列から開始日と終了日を計算する関数
+func getMonthDates(monthStr string, location *time.Location) (time.Time, time.Time, error) {
+	// YYYY-MM形式の文字列をパース
+	t, err := time.ParseInLocation("2006-01", monthStr, location)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+
+	// 月の初日
+	startDate := t
+
+	// 月の末日（翌月の1日から1日引く）
+	endDate := t.AddDate(0, 1, 0).AddDate(0, 0, -1)
+
+	return startDate, endDate, nil
+}
+
 func main() {
 	// アプリケーションのディレクトリを取得
 	appDir := getAppDir()
@@ -162,16 +179,11 @@ func main() {
 	// コマンドライン引数の解析
 	startDateStr := flag.String("start", "", "開始日（YYYY-MM-DD形式）")
 	endDateStr := flag.String("end", "", "終了日（YYYY-MM-DD形式）")
+	monthStr := flag.String("month", "", "月指定（YYYY-MM形式）")
 	eventName := flag.String("name", "", "検索するイベント名")
 	calendarID := flag.String("calendar", "primary", "カレンダーID（デフォルトは 'primary'）")
 	isList := flag.Bool("list", false, "利用可能なカレンダーの一覧を表示")
 	flag.Parse()
-
-	// 引数の検証（calendarIDはデフォルト値があるので必須チェックしない）
-	if !*isList && (*startDateStr == "" || *endDateStr == "" || *eventName == "") {
-		fmt.Println("使用方法: go run main.go -start=YYYY-MM-DD -end=YYYY-MM-DD -name=イベント名 [-calendar=カレンダーID]")
-		os.Exit(1)
-	}
 
 	// 認証設定
 	ctx := context.Background()
@@ -196,28 +208,57 @@ func main() {
 		return
 	}
 
+	// 引数の検証
+	if !*isList && *eventName == "" {
+		fmt.Println("エラー: イベント名を指定してください。")
+		fmt.Println("使用方法: gcal-sum -start=YYYY-MM-DD -end=YYYY-MM-DD -name=イベント名 [-calendar=カレンダーID]")
+		fmt.Println("または: gcal-sum -month=YYYY-MM -name=イベント名 [-calendar=カレンダーID]")
+		os.Exit(1)
+	}
+
 	// 日付文字列をTime型に変換
 	jst, err := time.LoadLocation("Asia/Tokyo")
 	if err != nil {
 		log.Fatalf("タイムゾーンの読み込みに失敗しました: %v", err)
 	}
 
-	startDate, err := time.ParseInLocation("2006-01-02", *startDateStr, jst)
-	if err != nil {
-		log.Fatalf("開始日の解析に失敗しました: %v", err)
+	var startDate, endDate time.Time
+
+	// month引数が指定されている場合は、その月の初日と末日を計算
+	if *monthStr != "" {
+		startDate, endDate, err = getMonthDates(*monthStr, jst)
+		if err != nil {
+			log.Fatalf("月指定の解析に失敗しました: %v", err)
+		}
+	} else if *startDateStr != "" && *endDateStr != "" {
+		// startとendが両方指定されている場合は従来通りそれらを使用
+		startDate, err = time.ParseInLocation("2006-01-02", *startDateStr, jst)
+		if err != nil {
+			log.Fatalf("開始日の解析に失敗しました: %v", err)
+		}
+
+		endDate, err = time.ParseInLocation("2006-01-02", *endDateStr, jst)
+		if err != nil {
+			log.Fatalf("終了日の解析に失敗しました: %v", err)
+		}
+	} else {
+		// どちらの形式も指定されていない場合はエラー
+		fmt.Println("エラー: 日付範囲を指定してください。")
+		fmt.Println("使用方法: gcal-sum -start=YYYY-MM-DD -end=YYYY-MM-DD -name=イベント名 [-calendar=カレンダーID]")
+		fmt.Println("または: gcal-sum -month=YYYY-MM -name=イベント名 [-calendar=カレンダーID]")
+		os.Exit(1)
 	}
 
-	endDate, err := time.ParseInLocation("2006-01-02", *endDateStr, jst)
-	if err != nil {
-		log.Fatalf("終了日の解析に失敗しました: %v", err)
-	}
-	// 終了日の終わりまで含めるため、1日追加
-	endDate = endDate.AddDate(0, 0, 1)
+	// endDateに対しては検索時に「終日」を含めるために1日追加する
+	searchEndDate := endDate.AddDate(0, 0, 1)
+
+	// 指定日範囲の表示
+	fmt.Printf("検索期間: %s から %s\n", startDate.Format("2006/01/02"), endDate.Format("2006/01/02"))
 
 	// カレンダーイベントの取得（calendarIDを使用）
 	events, err := srv.Events.List(*calendarID).
 		TimeMin(startDate.Format(time.RFC3339)).
-		TimeMax(endDate.Format(time.RFC3339)).
+		TimeMax(searchEndDate.Format(time.RFC3339)).
 		SingleEvents(true).
 		OrderBy("startTime").
 		Do()
